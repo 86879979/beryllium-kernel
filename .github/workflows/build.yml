@@ -49,6 +49,8 @@ jobs:
           if [ -s ../extra.config ]; then
             ARCH=arm64 scripts/kconfig/merge_config.sh -m -O out out/.config ../extra.config
           fi
+          # تعطيل vDSO الـ 32-bit لأنه بيفشل مع assembler الجهاز المضيف
+          scripts/config --file out/.config --disable COMPAT_VDSO
           make O=out ARCH=arm64 CC=clang olddefconfig
 
       - name: Build
@@ -57,7 +59,8 @@ jobs:
           make -j"$(nproc)" O=out ARCH=arm64 \
             CC=clang \
             CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- 2>&1 | tee ../build.log
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- 2>&1 | tee ../build.log
           ls out/arch/arm64/boot/
 
       - name: Package with AnyKernel3
