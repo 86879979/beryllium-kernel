@@ -1,0 +1,74 @@
+name: Build beryllium kernel
+
+on:
+  workflow_dispatch:
+
+env:
+  # ===== عدّل هذه القيم =====
+  KERNEL_REPO: "https://github.com/CHANGE_ME/kernel_repo"   # رابط سورس النواة
+  KERNEL_BRANCH: "CHANGE_ME"                                # الـ branch
+  DEFCONFIG: "beryllium_defconfig"                          # اسم الـ defconfig (تأكد منه في arch/arm64/configs)
+  CLANG_BRANCH: "android12-release"                         # branch فيه clang-r416183b (تأكد منه)
+  CLANG_DIR: "clang-r416183b"
+  # ==========================
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (for extra.config)
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison flex libssl-dev libelf-dev make \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi zip git python3 cpio
+
+      - name: Get kernel source
+        run: git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" kernel
+
+      - name: Get clang (same version as stock kernel)
+        run: |
+          git clone --depth=1 -b "$CLANG_BRANCH" \
+            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-all
+          echo "$GITHUB_WORKSPACE/clang-all/$CLANG_DIR/bin" >> "$GITHUB_PATH"
+
+      - name: Configure
+        working-directory: kernel
+        run: |
+          make O=out ARCH=arm64 "$DEFCONFIG"
+          if [ -s ../extra.config ]; then
+            ARCH=arm64 scripts/kconfig/merge_config.sh -m -O out out/.config ../extra.config
+            make O=out ARCH=arm64 olddefconfig
+          fi
+
+      - name: Build
+        working-directory: kernel
+        run: |
+          make -j"$(nproc)" O=out ARCH=arm64 \
+            CC=clang \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- 2>&1 | tee ../build.log
+          ls out/arch/arm64/boot/
+
+      - name: Package with AnyKernel3
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 ak3
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb ak3/
+          sed -i 's/^do.devicecheck=.*/do.devicecheck=1/; s/^device.name1=.*/device.name1=beryllium/; s/^is_slot_device=.*/is_slot_device=0;/' ak3/anykernel.sh
+          sed -i 's|^block=.*|block=/dev/block/bootdevice/by-name/boot;|' ak3/anykernel.sh
+          cd ak3 && zip -r9 ../beryllium-kernel.zip . -x '.git*' '*.md'
+
+      - name: Upload zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: beryllium-kernel
+          path: beryllium-kernel.zip
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
