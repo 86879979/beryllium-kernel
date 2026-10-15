@@ -170,6 +170,17 @@ jobs:
             's|^block=.*|block=/dev/block/bootdevice/by-name/boot;|' \
             ak3/anykernel.sh
 
+          # AnyKernel3 الحديث بيستخدم حروف كبيرة (BLOCK / IS_SLOT_DEVICE)
+          sed -i \
+            's|^BLOCK=.*|BLOCK=/dev/block/bootdevice/by-name/boot;|; s|^IS_SLOT_DEVICE=.*|IS_SLOT_DEVICE=0;|' \
+            ak3/anykernel.sh
+
+          echo "=== anykernel.sh settings ==="
+          grep -niE '^(block|is_slot_device|device\.name1|do\.devicecheck)=' ak3/anykernel.sh
+          grep -q '^BLOCK=/dev/block/bootdevice/by-name/boot;' ak3/anykernel.sh \
+            || grep -q '^block=/dev/block/bootdevice/by-name/boot;' ak3/anykernel.sh \
+            || { echo "ERROR: boot block path not set"; exit 1; }
+
           cd ak3
           zip -r9 ../beryllium-kernel.zip . -x '.git*' '*.md'
 
