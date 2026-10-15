@@ -109,7 +109,11 @@ jobs:
           # بس الدرايفر بيشوف إنها 4.9 فبيستخدم الواجهة القديمة
           echo "=== 4.12 version gates before ===" | tee -a module.log
           grep -nE "KERNEL_VERSION\(4, ?12, ?0\)" drv/os_dep/linux/ioctl_cfg80211.c | tee -a module.log || true
-          sed -i -E 's/KERNEL_VERSION\(4, ?12, ?0\)/KERNEL_VERSION(4, 9, 0)/g' drv/os_dep/linux/ioctl_cfg80211.c
+          # بنغيّر بس بوابات (>= 4.12)؛ بوابات (< 4.12) لازم تفضل زي ما هي
+          # لأن نواتك لسه فيها الشكل القديم لـ change_virtual_intf (مع معامل flags)
+          sed -i -E 's/>= KERNEL_VERSION\(4, ?12, ?0\)/>= KERNEL_VERSION(4, 9, 0)/g' drv/os_dep/linux/ioctl_cfg80211.c
+          echo "=== 4.12 gates after ===" | tee -a module.log
+          grep -nE "KERNEL_VERSION\(4, ?(9|12), ?0\)" drv/os_dep/linux/ioctl_cfg80211.c | tee -a module.log || true
 
           # arm64 little-endian instead of the x86 defaults
           sed -i 's/^CONFIG_PLATFORM_I386_PC *=.*/CONFIG_PLATFORM_I386_PC = n/' drv/Makefile
