@@ -67,6 +67,20 @@ jobs:
 
           make O=out ARCH=arm64 CC=clang LOCALVERSION= olddefconfig
 
+          # تأكد إن كل خيار في extra.config دخل فعلاً في الـ config النهائي
+          : > ../config-check.txt
+          if [ -s ../extra.config ]; then
+            grep -E '^CONFIG_[A-Za-z0-9_]+=' ../extra.config | while IFS='=' read -r k v; do
+              if grep -qx "$k=$v" out/.config; then
+                echo "OK      $k=$v" >> ../config-check.txt
+              else
+                echo "DROPPED $k=$v" >> ../config-check.txt
+              fi
+            done
+          fi
+          echo "=== extra.config check ==="
+          cat ../config-check.txt
+
       - name: Build kernel
         working-directory: kernel
         run: |
@@ -203,5 +217,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-log
-          path: build.log
+          path: |
+            build.log
+            config-check.txt
           if-no-files-found: warn
