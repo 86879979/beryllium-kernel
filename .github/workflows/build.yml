@@ -51,6 +51,9 @@ jobs:
           fi
           # تعطيل vDSO الـ 32-bit لأنه بيفشل مع assembler الجهاز المضيف
           scripts/config --file out/.config --disable COMPAT_VDSO
+          # نفس اسم إصدار النواة الأصلية (4.9.337-g56f4118d056c-dirty) عشان modules الجهاز تفضل تتحمّل
+          scripts/config --file out/.config --disable LOCALVERSION_AUTO
+          scripts/config --file out/.config --set-str LOCALVERSION "-g56f4118d056c-dirty"
           make O=out ARCH=arm64 CC=clang olddefconfig
 
       - name: Build
@@ -60,8 +63,22 @@ jobs:
             CC=clang \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- 2>&1 | tee ../build.log
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+            KCFLAGS="-Wno-error" 2>&1 | tee ../build.log
           ls out/arch/arm64/boot/
+
+      - name: Build RTL8188EUS module (TP-Link v2) - non fatal
+        continue-on-error: true
+        run: |
+          git clone --depth=1 -b v5.3.9 https://github.com/aircrack-ng/rtl8188eus drv
+          sed -i 's/^CONFIG_PLATFORM_I386_PC *=.*/CONFIG_PLATFORM_I386_PC = n/' drv/Makefile
+          cd kernel
+          make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- modules_prepare
+          make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- KCFLAGS="-Wno-error" \
+            M="$GITHUB_WORKSPACE/drv" modules 2>&1 | tee ../module.log
+          cp "$GITHUB_WORKSPACE/drv/8188eu.ko" "$GITHUB_WORKSPACE/8188eu.ko"
 
       - name: Package with AnyKernel3
         run: |
@@ -76,6 +93,15 @@ jobs:
         with:
           name: beryllium-kernel
           path: beryllium-kernel.zip
+
+      - name: Upload module (if built)
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtl8188eu-module
+          path: |
+            8188eu.ko
+            module.log
+          if-no-files-found: ignore
 
       - name: Upload build log
         if: always()
