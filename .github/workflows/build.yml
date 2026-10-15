@@ -4,18 +4,16 @@ on:
   workflow_dispatch:
 
 env:
-  # ===== عدّل هذه القيم =====
   KERNEL_REPO: "https://github.com/Strix-Vyxlor/android_kernel_xiaomi_sdm845"
   KERNEL_BRANCH: "lineage-21"
-  # لو رفعت ملف device.config (من /proc/config.gz) يستخدمه بدل الـ defconfig
   DEFCONFIG: ""
-  CLANG_BRANCH: "android12-release"                         # branch فيه clang-r416183b (تأكد منه)
+  CLANG_BRANCH: "android12-release"
   CLANG_DIR: "clang-r416183b"
-  # ==========================
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout (for extra.config)
         uses: actions/checkout@v4
@@ -23,128 +21,146 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison flex libssl-dev libelf-dev make \
-            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi zip git python3 cpio
+          sudo apt-get install -y \
+            bc bison flex libssl-dev libelf-dev make \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
+            zip git python3 cpio
 
       - name: Get kernel source
-        run: git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" kernel
+        run: |
+          git clone --depth=1 -b "$KERNEL_BRANCH" \
+            "$KERNEL_REPO" kernel
 
-      - name: Get clang (same version as stock kernel)
+      - name: Get clang
         run: |
           git clone --depth=1 -b "$CLANG_BRANCH" \
-            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-all
+            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
+            clang-all
+
+          test -x "$GITHUB_WORKSPACE/clang-all/$CLANG_DIR/bin/clang"
           echo "$GITHUB_WORKSPACE/clang-all/$CLANG_DIR/bin" >> "$GITHUB_PATH"
 
       - name: Configure
         working-directory: kernel
         run: |
+          set -e
+
           if [ -s ../device.config ]; then
             mkdir -p out
             cp ../device.config out/.config
           elif [ -n "$DEFCONFIG" ]; then
             make O=out ARCH=arm64 CC=clang "$DEFCONFIG"
           else
-            echo "ERROR: ارفع device.config أو اكتب DEFCONFIG"; exit 1
+            echo "ERROR: Upload device.config or set DEFCONFIG"
+            exit 1
           fi
+
           if [ -s ../extra.config ]; then
-            ARCH=arm64 scripts/kconfig/merge_config.sh -m -O out out/.config ../extra.config
+            ARCH=arm64 scripts/kconfig/merge_config.sh \
+              -m -O out out/.config ../extra.config
           fi
-          # تعطيل vDSO الـ 32-bit لأنه بيفشل مع assembler الجهاز المضيف
+
           scripts/config --file out/.config --disable COMPAT_VDSO
-          # نفس اسم إصدار النواة الأصلية (4.9.337-g56f4118d056c-dirty) عشان modules الجهاز تفضل تتحمّل
           scripts/config --file out/.config --disable LOCALVERSION_AUTO
-          scripts/config --file out/.config --set-str LOCALVERSION "-g56f4118d056c-dirty"
+          scripts/config --file out/.config \
+            --set-str LOCALVERSION "-g56f4118d056c-dirty"
+
           make O=out ARCH=arm64 CC=clang olddefconfig
 
-      - name: Build
+      - name: Build kernel
         working-directory: kernel
         run: |
+          set -o pipefail
+
           make -j"$(nproc)" O=out ARCH=arm64 \
             CC=clang \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
             CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
             KCFLAGS="-Wno-error" 2>&1 | tee ../build.log
-          ls out/arch/arm64/boot/
 
-      - name: Build RTL8188EUS module
+          ls -lh out/arch/arm64/boot/
+
+      - name: Build RTL8188EUS module (TP-Link v2)
         continue-on-error: true
         run: |
           set -uo pipefail
 
-          git clone --depth=1 -b v5.3.9 \
-            https://github.com/aircrack-ng/rtl8188eus drv
-
-          {
-            echo "=== Driver Makefile platform options ==="
-            grep -nE 'CONFIG_PLATFORM_|KSRC|KVER|KERNEL' drv/Makefile || true
-
-            echo "=== Kernel release ==="
-            if [ -f kernel/out/include/config/kernel.release ]; then
-              cat kernel/out/include/config/kernel.release
-            else
-              echo "kernel.release not found"
-            fi
-
-            echo "=== Driver build files ==="
-            find drv -maxdepth 2 \
-              \( -name Makefile -o -name Kbuild \) -print
-
-            echo "=== Build tools ==="
-            command -v make || true
-            command -v clang || true
-            command -v aarch64-linux-gnu-gcc || true
-
-            echo "=== Kernel directories ==="
-            ls -ld kernel kernel/out 2>&1 || true
-          } | tee module.log
-
-          echo "=== Prepare kernel modules ==="
-          if [ -d kernel ] && [ -d kernel/out ]; then
-            make -C "$GITHUB_WORKSPACE/kernel" \
-              O="$GITHUB_WORKSPACE/kernel/out" \
-              ARCH=arm64 \
-              CC=clang \
-              CROSS_COMPILE=aarch64-linux-gnu- \
-              CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-              modules_prepare 2>&1 | tee -a module.log
-          else
-            echo "ERROR: kernel or kernel/out directory is missing" \
-              | tee -a module.log
+          if ! git clone --depth=1 -b v5.3.9 \
+            https://github.com/aircrack-ng/rtl8188eus drv; then
+            echo "ERROR: Driver source clone failed" | tee module.log
+            exit 0
           fi
 
-          echo "=== Diagnostic stage complete ==="
-          echo "Driver module has not been built yet." \
-            | tee -a module.log
+          # arm64 little-endian instead of the x86 defaults
+          sed -i 's/^CONFIG_PLATFORM_I386_PC *=.*/CONFIG_PLATFORM_I386_PC = n/' drv/Makefile
+          sed -i 's/^CONFIG_PLATFORM_ARM64_RPI *=.*/CONFIG_PLATFORM_ARM64_RPI = y/' drv/Makefile
 
-      - name: Upload module diagnostics
+          {
+            echo "=== Kernel release ==="
+            cat kernel/out/include/config/kernel.release
+            echo "=== Platform options in Makefile ==="
+            grep -nE '^CONFIG_PLATFORM_(I386_PC|ARM64_RPI)' drv/Makefile || true
+          } | tee module.log
+
+          # CONFIG_RTL8188EU=m is required: calling the kernel make directly
+          # skips the driver's own wrapper, so the module would be "0 modules"
+          make -C "$GITHUB_WORKSPACE/kernel" \
+            O="$GITHUB_WORKSPACE/kernel/out" \
+            ARCH=arm64 CC=clang \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            KCFLAGS="-Wno-error" \
+            M="$GITHUB_WORKSPACE/drv" \
+            CONFIG_RTL8188EU=m \
+            modules 2>&1 | tee -a module.log
+
+          cp drv/8188eu.ko 8188eu.ko
+          echo "=== modinfo-like check ===" | tee -a module.log
+          strings 8188eu.ko | grep -E '^(vermagic|depends)=' | tee -a module.log
+
+      - name: Upload module logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rtl8188eus-diagnostics
+          name: rtl8188eus-log
           path: module.log
           if-no-files-found: warn
+
       - name: Package with AnyKernel3
         run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 ak3
-          cp kernel/out/arch/arm64/boot/Image.gz-dtb ak3/
-          sed -i 's/^do.devicecheck=.*/do.devicecheck=1/; s/^device.name1=.*/device.name1=beryllium/; s/^is_slot_device=.*/is_slot_device=0;/' ak3/anykernel.sh
-          sed -i 's|^block=.*|block=/dev/block/bootdevice/by-name/boot;|' ak3/anykernel.sh
-          cd ak3 && zip -r9 ../beryllium-kernel.zip . -x '.git*' '*.md'
+          set -e
 
-      - name: Upload zip
+          git clone --depth=1 \
+            https://github.com/osm0sis/AnyKernel3 ak3
+
+          test -s kernel/out/arch/arm64/boot/Image.gz-dtb
+
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb ak3/
+
+          sed -i \
+            's/^do.devicecheck=.*/do.devicecheck=1/; s/^device.name1=.*/device.name1=beryllium/; s/^is_slot_device=.*/is_slot_device=0;/' \
+            ak3/anykernel.sh
+
+          sed -i \
+            's|^block=.*|block=/dev/block/bootdevice/by-name/boot;|' \
+            ak3/anykernel.sh
+
+          cd ak3
+          zip -r9 ../beryllium-kernel.zip . -x '.git*' '*.md'
+
+      - name: Upload kernel zip
         uses: actions/upload-artifact@v4
         with:
           name: beryllium-kernel
           path: beryllium-kernel.zip
 
       - name: Upload module (if built)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: rtl8188eu-module
-          path: |
-            8188eu.ko
-            module.log
+          path: 8188eu.ko
           if-no-files-found: ignore
 
       - name: Upload build log
@@ -153,3 +169,4 @@ jobs:
         with:
           name: build-log
           path: build.log
+          if-no-files-found: warn
