@@ -65,7 +65,7 @@ jobs:
           scripts/config --file out/.config \
             --set-str LOCALVERSION "-g56f4118d056c-dirty"
 
-          make O=out ARCH=arm64 CC=clang olddefconfig
+          make O=out ARCH=arm64 CC=clang LOCALVERSION= olddefconfig
 
       - name: Build kernel
         working-directory: kernel
@@ -77,9 +77,18 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
             CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+            LOCALVERSION= \
             KCFLAGS="-Wno-error" 2>&1 | tee ../build.log
 
           ls -lh out/arch/arm64/boot/
+
+          # لازم يطابق النواة الأصلية بالظبط (بدون علامة +) وإلا modules الجهاز مش هتتحمّل
+          REL="$(cat out/include/config/kernel.release)"
+          echo "Kernel release: $REL"
+          if [ "$REL" != "4.9.337-g56f4118d056c-dirty" ]; then
+            echo "ERROR: release mismatch: $REL"
+            exit 1
+          fi
 
       - name: Build RTL8188EUS module (TP-Link v2)
         continue-on-error: true
@@ -91,6 +100,10 @@ jobs:
             echo "ERROR: Driver source clone failed" | tee module.log
             exit 0
           fi
+
+          # clang 12 مش بيعرف بعض خيارات gcc في Makefile الدرايفر
+          find drv -type f \( -name Makefile -o -name Kbuild -o -name '*.mk' \) \
+            -exec sed -i 's/-Wno-cast-function-type//g; s/-Werror//g' {} +
 
           # arm64 little-endian instead of the x86 defaults
           sed -i 's/^CONFIG_PLATFORM_I386_PC *=.*/CONFIG_PLATFORM_I386_PC = n/' drv/Makefile
@@ -110,7 +123,8 @@ jobs:
             ARCH=arm64 CC=clang \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            KCFLAGS="-Wno-error" \
+            LOCALVERSION= \
+            KCFLAGS="-Wno-error -Wno-unknown-warning-option" \
             M="$GITHUB_WORKSPACE/drv" \
             CONFIG_RTL8188EU=m \
             modules 2>&1 | tee -a module.log
