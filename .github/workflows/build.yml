@@ -105,6 +105,12 @@ jobs:
           find drv -type f \( -name Makefile -o -name Kbuild -o -name '*.mk' \) \
             -exec sed -i 's/-Wno-cast-function-type//g; s/-Werror//g' {} +
 
+          # نواة 4.9 هنا فيها واجهة cfg80211_roamed الجديدة (backport من 4.12)،
+          # بس الدرايفر بيشوف إنها 4.9 فبيستخدم الواجهة القديمة
+          echo "=== 4.12 version gates before ===" | tee -a module.log
+          grep -nE "KERNEL_VERSION\(4, ?12, ?0\)" drv/os_dep/linux/ioctl_cfg80211.c | tee -a module.log || true
+          sed -i -E 's/KERNEL_VERSION\(4, ?12, ?0\)/KERNEL_VERSION(4, 9, 0)/g' drv/os_dep/linux/ioctl_cfg80211.c
+
           # arm64 little-endian instead of the x86 defaults
           sed -i 's/^CONFIG_PLATFORM_I386_PC *=.*/CONFIG_PLATFORM_I386_PC = n/' drv/Makefile
           sed -i 's/^CONFIG_PLATFORM_ARM64_RPI *=.*/CONFIG_PLATFORM_ARM64_RPI = y/' drv/Makefile
@@ -114,7 +120,7 @@ jobs:
             cat kernel/out/include/config/kernel.release
             echo "=== Platform options in Makefile ==="
             grep -nE '^CONFIG_PLATFORM_(I386_PC|ARM64_RPI)' drv/Makefile || true
-          } | tee module.log
+          } | tee -a module.log
 
           # CONFIG_RTL8188EU=m is required: calling the kernel make directly
           # skips the driver's own wrapper, so the module would be "0 modules"
