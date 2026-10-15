@@ -67,7 +67,7 @@ jobs:
             KCFLAGS="-Wno-error" 2>&1 | tee ../build.log
           ls out/arch/arm64/boot/
 
-      - - name: Build RTL8188EUS module
+      - name: Build RTL8188EUS module
         continue-on-error: true
         run: |
           set -uo pipefail
