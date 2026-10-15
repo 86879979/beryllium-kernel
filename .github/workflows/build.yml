@@ -67,19 +67,63 @@ jobs:
             KCFLAGS="-Wno-error" 2>&1 | tee ../build.log
           ls out/arch/arm64/boot/
 
-      - name: Build RTL8188EUS module (TP-Link v2) - non fatal
+      - - name: Build RTL8188EUS module
         continue-on-error: true
         run: |
-          git clone --depth=1 -b v5.3.9 https://github.com/aircrack-ng/rtl8188eus drv
-          sed -i 's/^CONFIG_PLATFORM_I386_PC *=.*/CONFIG_PLATFORM_I386_PC = n/' drv/Makefile
-          cd kernel
-          make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- modules_prepare
-          make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- KCFLAGS="-Wno-error" \
-            M="$GITHUB_WORKSPACE/drv" modules 2>&1 | tee ../module.log
-          cp "$GITHUB_WORKSPACE/drv/8188eu.ko" "$GITHUB_WORKSPACE/8188eu.ko"
+          set -uo pipefail
 
+          git clone --depth=1 -b v5.3.9 \
+            https://github.com/aircrack-ng/rtl8188eus drv
+
+          {
+            echo "=== Driver Makefile platform options ==="
+            grep -nE 'CONFIG_PLATFORM_|KSRC|KVER|KERNEL' drv/Makefile || true
+
+            echo "=== Kernel release ==="
+            if [ -f kernel/out/include/config/kernel.release ]; then
+              cat kernel/out/include/config/kernel.release
+            else
+              echo "kernel.release not found"
+            fi
+
+            echo "=== Driver build files ==="
+            find drv -maxdepth 2 \
+              \( -name Makefile -o -name Kbuild \) -print
+
+            echo "=== Build tools ==="
+            command -v make || true
+            command -v clang || true
+            command -v aarch64-linux-gnu-gcc || true
+
+            echo "=== Kernel directories ==="
+            ls -ld kernel kernel/out 2>&1 || true
+          } | tee module.log
+
+          echo "=== Prepare kernel modules ==="
+          if [ -d kernel ] && [ -d kernel/out ]; then
+            make -C "$GITHUB_WORKSPACE/kernel" \
+              O="$GITHUB_WORKSPACE/kernel/out" \
+              ARCH=arm64 \
+              CC=clang \
+              CROSS_COMPILE=aarch64-linux-gnu- \
+              CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+              modules_prepare 2>&1 | tee -a module.log
+          else
+            echo "ERROR: kernel or kernel/out directory is missing" \
+              | tee -a module.log
+          fi
+
+          echo "=== Diagnostic stage complete ==="
+          echo "Driver module has not been built yet." \
+            | tee -a module.log
+
+      - name: Upload module diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtl8188eus-diagnostics
+          path: module.log
+          if-no-files-found: warn
       - name: Package with AnyKernel3
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3 ak3
